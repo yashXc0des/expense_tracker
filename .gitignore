@@ -1,0 +1,40 @@
+# dependencies
+node_modules/
+
+# expo
+.expo/
+dist/
+
+# metro
+.metro-health-check*
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# macOS
+.DS_Store
+
+# vscode
+.vscode/
+
+# android
+android/.gradle/
+android/app/build/
+android/build/
+
+# ios
+ios/build/
+ios/Pods/
+
+# env
+.env
+
+# generated
+*.keystore
+*.jks
+
+eventtracker_plan.md
+
+backend\.env
