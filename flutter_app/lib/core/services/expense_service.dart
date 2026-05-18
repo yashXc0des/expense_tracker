@@ -63,6 +63,8 @@ class ExpenseService {
         'note': expense.note ?? '',
         'date': expense.date.toIso8601String(),
         'receiptText': expense.receiptText ?? '',
+        if (expense.journeyId != null && expense.journeyId!.isNotEmpty)
+          'journeyId': expense.journeyId,
       });
 
       // Add image if available
@@ -76,15 +78,41 @@ class ExpenseService {
         ));
       }
 
-      final response = await _dio.post(
-        '${ApiService.instance.baseUrl}/expenses',
-        data: formData,
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer $token',
-          },
-        ),
-      );
+      Response response;
+      try {
+        response = await _dio.post(
+          '${ApiService.instance.baseUrl}/expenses',
+          data: formData,
+          options: Options(
+            headers: {
+              'Authorization': 'Bearer $token',
+            },
+          ),
+        );
+      } on DioException catch (e) {
+        if (e.response?.statusCode == 401) {
+          final refreshed = await _api.tryRefreshAccessToken();
+          if (!refreshed) {
+            print('[ExpenseService] Token refresh failed during upload');
+            return false;
+          }
+          final retryToken = await _api.getToken();
+          if (retryToken == null || retryToken.isEmpty) {
+            return false;
+          }
+          response = await _dio.post(
+            '${ApiService.instance.baseUrl}/expenses',
+            data: formData,
+            options: Options(
+              headers: {
+                'Authorization': 'Bearer $retryToken',
+              },
+            ),
+          );
+        } else {
+          rethrow;
+        }
+      }
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         print('[ExpenseService] Upload successful');

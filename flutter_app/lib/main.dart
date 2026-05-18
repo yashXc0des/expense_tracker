@@ -3,10 +3,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app/theme.dart';
 import 'features/home/home_screen.dart';
 import 'features/auth/login_screen.dart';
+import 'features/camera/camera_capture_screen.dart';
 import 'core/services/auth_service.dart';
+import 'core/services/database_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize database
+  await DatabaseService().init();
+  
   final prefs = await SharedPreferences.getInstance();
   final savedTheme = prefs.getString('themeMode') ?? 'system';
   await AuthService.instance.init();
@@ -58,6 +64,26 @@ class _MyAppState extends State<MyApp> {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: _themeMode,
+      onGenerateRoute: (settings) {
+        switch (settings.name) {
+          case '/':
+            return MaterialPageRoute(
+              builder: (_) => AuthGate(
+                onThemeChanged: setTheme,
+                themeMode: _themeMode,
+              ),
+            );
+          case '/capture':
+            return MaterialPageRoute(
+              builder: (_) => Scaffold(
+                appBar: AppBar(title: const Text('Capture Receipt')),
+                body: const CameraCaptureScreen(),
+              ),
+            );
+          default:
+            return null;
+        }
+      },
       home: AuthGate(onThemeChanged: setTheme, themeMode: _themeMode),
     );
   }

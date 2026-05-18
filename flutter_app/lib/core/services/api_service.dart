@@ -9,9 +9,11 @@ class ApiService {
   // Update this base URL as needed or use --dart-define
   String baseUrl = const String.fromEnvironment('API_BASE_URL', defaultValue: 'https://refinish-osmosis-domain.ngrok-free.dev/api');
 
+  bool _refreshInProgress = false;
+
   Future<Map<String, dynamic>?> post(String path, Map<String, dynamic> body, {bool auth = true}) async {
     final uri = Uri.parse('$baseUrl$path');
-    final headers = await _defaultHeaders(auth: auth);
+    Map<String, String> headers = await _defaultHeaders(auth: auth);
     try {
       // Debug log
       final maskedHeaders = Map<String, String>.from(headers);
@@ -22,7 +24,15 @@ class ApiService {
       print('[ApiService] Headers: $maskedHeaders');
       print('[ApiService] Body: ${jsonEncode(body)}');
 
-      final res = await http.post(uri, headers: headers, body: jsonEncode(body));
+      var res = await http.post(uri, headers: headers, body: jsonEncode(body));
+
+      if (auth && res.statusCode == 401) {
+        final refreshed = await tryRefreshAccessToken();
+        if (refreshed) {
+          headers = await _defaultHeaders(auth: true);
+          res = await http.post(uri, headers: headers, body: jsonEncode(body));
+        }
+      }
 
       print('[ApiService] Response ${res.statusCode}: ${res.body}');
       return _handleResponse(res);
@@ -35,13 +45,21 @@ class ApiService {
 
   Future<Map<String, dynamic>?> get(String path, {bool auth = true}) async {
     final uri = Uri.parse('$baseUrl$path');
-    final headers = await _defaultHeaders(auth: auth);
+    Map<String, String> headers = await _defaultHeaders(auth: auth);
     try {
       final maskedHeaders = Map<String, String>.from(headers);
       if (maskedHeaders.containsKey('Authorization')) maskedHeaders['Authorization'] = '[REDACTED]';
       print('[ApiService] GET $uri');
       print('[ApiService] Headers: $maskedHeaders');
-      final res = await http.get(uri, headers: headers);
+      var res = await http.get(uri, headers: headers);
+
+      if (auth && res.statusCode == 401) {
+        final refreshed = await tryRefreshAccessToken();
+        if (refreshed) {
+          headers = await _defaultHeaders(auth: true);
+          res = await http.get(uri, headers: headers);
+        }
+      }
       print('[ApiService] Response ${res.statusCode}: ${res.body}');
       return _handleResponse(res);
     } catch (e, s) {
@@ -84,10 +102,17 @@ class ApiService {
       'page': page.toString(),
       'limit': limit.toString(),
     });
-    final headers = await _defaultHeaders(auth: true);
+    Map<String, String> headers = await _defaultHeaders(auth: true);
     try {
       print('[ApiService] GET $uri');
-      final res = await http.get(uri, headers: headers);
+      var res = await http.get(uri, headers: headers);
+      if (res.statusCode == 401) {
+        final refreshed = await tryRefreshAccessToken();
+        if (refreshed) {
+          headers = await _defaultHeaders(auth: true);
+          res = await http.get(uri, headers: headers);
+        }
+      }
       print('[ApiService] Response ${res.statusCode}: ${res.body}');
       return _handleResponse(res);
     } catch (e, s) {
@@ -124,19 +149,76 @@ class ApiService {
 
   Future<Map<String, dynamic>?> delete(String path, {bool auth = true}) async {
     final uri = Uri.parse('$baseUrl$path');
-    final headers = await _defaultHeaders(auth: auth);
+    Map<String, String> headers = await _defaultHeaders(auth: auth);
     try {
       final maskedHeaders = Map<String, String>.from(headers);
       if (maskedHeaders.containsKey('Authorization')) maskedHeaders['Authorization'] = '[REDACTED]';
       print('[ApiService] DELETE $uri');
       print('[ApiService] Headers: $maskedHeaders');
-      final res = await http.delete(uri, headers: headers);
+      var res = await http.delete(uri, headers: headers);
+      if (auth && res.statusCode == 401) {
+        final refreshed = await tryRefreshAccessToken();
+        if (refreshed) {
+          headers = await _defaultHeaders(auth: true);
+          res = await http.delete(uri, headers: headers);
+        }
+      }
       print('[ApiService] Response ${res.statusCode}: ${res.body}');
       return _handleResponse(res);
     } catch (e, s) {
       print('[ApiService] DELETE error $uri -> $e');
       print(s);
       rethrow;
+    }
+  }
+
+  Future<String?> getRefreshToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('refreshToken');
+  }
+
+  Future<bool> tryRefreshAccessToken() async {
+    if (_refreshInProgress) {
+      // If another request is refreshing already, let caller retry after a short wait.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final token = await getToken();
+      return token != null && token.isNotEmpty;
+    }
+
+    _refreshInProgress = true;
+    try {
+      final refreshToken = await getRefreshToken();
+      if (refreshToken == null || refreshToken.isEmpty) {
+        return false;
+      }
+
+      final uri = Uri.parse('$baseUrl/auth/refresh');
+      final res = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'token': refreshToken}),
+      );
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return false;
+      }
+
+      final decoded = jsonDecode(res.body) as Map<String, dynamic>;
+      final access = decoded['accessToken'] ?? decoded['access_token'];
+      final refresh = decoded['refreshToken'] ?? decoded['refresh_token'] ?? refreshToken;
+
+      if (access == null) {
+        return false;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('accessToken', access.toString());
+      await prefs.setString('refreshToken', refresh.toString());
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      _refreshInProgress = false;
     }
   }
 

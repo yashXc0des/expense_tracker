@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'api_service.dart';
 
 class OcrService {
   static final OcrService _instance = OcrService._internal();
   late Dio _dio;
+  final ApiService _api = ApiService.instance;
 
   factory OcrService() {
     return _instance;
@@ -11,7 +13,7 @@ class OcrService {
 
   OcrService._internal() {
     _dio = Dio(BaseOptions(
-      baseUrl: 'http://localhost:8000',
+      baseUrl: ApiService.instance.baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 30),
     ));
@@ -22,6 +24,11 @@ class OcrService {
     try {
       print('[OCR] Extracting data from: ${imageFile.path}');
 
+      final token = await _api.getToken();
+      if (token == null || token.isEmpty) {
+        throw Exception('Authentication required for OCR');
+      }
+
       final formData = FormData.fromMap({
         'image': await MultipartFile.fromFile(
           imageFile.path,
@@ -29,7 +36,15 @@ class OcrService {
         ),
       });
 
-      final response = await _dio.post('/extract', data: formData);
+      final response = await _dio.post(
+        '/expenses/extract',
+        data: formData,
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $token',
+          },
+        ),
+      );
 
       if (response.statusCode == 200) {
         print('[OCR] Success: ${response.data}');
@@ -46,7 +61,7 @@ class OcrService {
   /// Health check for OCR service
   Future<bool> healthCheck() async {
     try {
-      final response = await _dio.get('/health');
+      final response = await _dio.get('/health'.replaceAll('/api/health', '/health'));
       return response.statusCode == 200;
     } catch (_) {
       return false;

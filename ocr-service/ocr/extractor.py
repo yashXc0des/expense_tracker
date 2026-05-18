@@ -1,15 +1,32 @@
 import re
+import os
 import pytesseract
 import numpy as np
 from datetime import datetime
 from PIL import Image
 
 
+# Ensure pytesseract can find Tesseract on Windows even when PATH is stale.
+if os.name == 'nt':
+    default_tesseract = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    if os.path.exists(default_tesseract):
+        pytesseract.pytesseract.tesseract_cmd = default_tesseract
+
+
 # Regex patterns for extracting amounts (handles various formats)
 AMOUNT_PATTERNS = [
-    r'(?:total|amount|grand\s*total|amt|sum)[:\s]*(?:rs\.?|inr|₹)?\s*([\d,]+\.?\d{0,2})',
-    r'(?:rs\.?|inr|₹)\s*([\d,]+\.?\d{0,2})',
-    r'\b([\d,]+\.\d{2})\b',  # fallback: any decimal number
+    # Pattern 1: Keywords like "total", "amount", "grand total", etc. with optional currency
+    r'(?:total|amount|grand\s*total|amt|sum|payable|due|pay)[:\s]*(?:rs\.?|inr|₹)?\s*([\d,]+\.?\d{0,2})',
+    # Pattern 2: Currency symbol at start, before amount
+    r'(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)',
+    # Pattern 3: Amount followed by currency symbol or text
+    r'([\d,]+(?:\.\d{1,2})?)\s*(?:rs|rupees|inr|₹)',
+    # Pattern 4: Line that starts with just the amount (common in Indian receipts)
+    r'^\s*([\d,]+(?:\.\d{1,2})?)\s*$',
+    # Pattern 5: Large currency amounts (more than 2 digits, indicating it's likely a total)
+    r'\b([\d]{3,}(?:,[\d]{3})*(?:\.\d{1,2})?)\b',
+    # Pattern 6: Any number format
+    r'\b([\d,]+(?:\.\d{1,2})?)\b',
 ]
 
 # Regex patterns for dates
@@ -46,7 +63,14 @@ def extract_receipt_data(binary_image: np.ndarray) -> dict:
         output_type=pytesseract.Output.DICT
     )
     
-    confidences = [c for c in data['conf'] if c != -1]
+    confidences = []
+    for c in data.get('conf', []):
+        try:
+            val = float(c)
+            if val >= 0:
+                confidences.append(val)
+        except (TypeError, ValueError):
+            continue
     avg_confidence = (
         sum(confidences) / len(confidences) / 100 
         if confidences 
@@ -66,17 +90,47 @@ def _extract_amount(text: str):
     """
     Extract total amount from receipt text.
     Tries multiple patterns to handle different receipt formats.
+    If all patterns fail, returns the largest number (usually the total).
     """
     lower = text.lower()
     
-    for pattern in AMOUNT_PATTERNS:
-        match = re.search(pattern, lower)
-        if match:
+    # Try all regex patterns first
+    for pattern in AMOUNT_PATTERNS[:-1]:  # Skip the last pattern for now
+        try:
+            # Use MULTILINE flag for line-based patterns
+            match = re.search(pattern, lower, re.MULTILINE)
+            if match:
+                try:
+                    amount_str = match.group(1).replace(',', '')
+                    val = float(amount_str)
+                    # Filter out obviously wrong amounts (too small or negative)
+                    if val > 0.01:
+                        return val
+                except (ValueError, IndexError):
+                    continue
+        except re.error:
+            continue
+    
+    # Fallback: Find the largest number in the text (often the total on a receipt)
+    # This handles cases like "Total 1234" or "Amount: 5000" without keywords
+    numbers = re.findall(r'[\d,]+(?:\.\d{1,2})?', text)
+    if numbers:
+        amounts = []
+        for num_str in numbers:
             try:
-                amount_str = match.group(1).replace(',', '')
-                return float(amount_str)
+                val = float(num_str.replace(',', ''))
+                if val > 0.01:  # Filter out tiny numbers (like prices of individual items)
+                    amounts.append(val)
             except ValueError:
                 continue
+        
+        # Return the largest amount (usually the total)
+        if amounts:
+            largest = max(amounts)
+            # But filter out suspiciously large amounts (likely quantities)
+            # For Indian context, reasonable totals are usually < 999,999
+            if largest < 999999:
+                return largest
     
     return None
 

@@ -18,12 +18,13 @@ class DatabaseService {
 
     _db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             expenseId TEXT UNIQUE NOT NULL,
+            journeyId TEXT,
             amount REAL NOT NULL,
             category TEXT NOT NULL,
             note TEXT,
@@ -39,6 +40,13 @@ class DatabaseService {
         await db.execute('CREATE INDEX idx_expenses_date ON expenses(date DESC)');
         await db.execute('CREATE INDEX idx_expenses_synced ON expenses(synced)');
         await db.execute('CREATE INDEX idx_expenses_category ON expenses(category)');
+        await db.execute('CREATE INDEX idx_expenses_journey ON expenses(journeyId)');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE expenses ADD COLUMN journeyId TEXT');
+          await db.execute('CREATE INDEX IF NOT EXISTS idx_expenses_journey ON expenses(journeyId)');
+        }
       },
     );
   }
