@@ -17,7 +17,7 @@ const expenseSchema = new mongoose.Schema({
   currency: { type: String, default: 'INR' },
   category: {
     type: String,
-    enum: ['Food', 'Travel', 'Fuel', 'Hotel', 'Parking', 'Utilities', 'Shopping', 'Health', 'Other'],
+    enum: ['Food', 'Travel', 'Fuel', 'Entertainment', 'Hotel', 'Parking', 'Utilities', 'Shopping', 'Health', 'Other'],
     required: true,
   },
   note: { type: String, trim: true },

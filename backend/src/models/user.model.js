@@ -11,7 +11,13 @@ const userSchema = new mongoose.Schema({
     index: true,
   },
   passwordHash: { type: String, required: true },
-  name: { type: String, required: true },
+  name: { 
+    type: String, 
+    default: function() { 
+      // Extract name from email (part before @) if not provided
+      return this.email?.split('@')[0] || 'User'; 
+    } 
+  },
   refreshTokens: [{ type: String }], // stored hashed
   createdAt: { type: Date, default: Date.now },
 });

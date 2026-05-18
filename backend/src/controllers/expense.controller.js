@@ -17,24 +17,30 @@ export const upload = multer({
 export const createExpense = async (req, res, next) => {
   try {
     const { amount, category, note, date, journeyId, latitude, longitude } = req.body;
+    console.log('[EXPENSE] createExpense request - user:', req.user.id, 'amount:', amount, 'category:', category, 'has_image:', !!req.file);
 
     // 1. Upload image to R2 (if provided)
     let imageKey = null,
       imageUrl = null;
     if (req.file) {
+      console.log('[EXPENSE] uploading image to R2 - size:', req.file.size);
       ({ key: imageKey, url: imageUrl } = await R2Service.uploadReceiptImage(
         req.user.id,
         req.file.buffer,
         req.file.mimetype
       ));
+      console.log('[EXPENSE] image uploaded - key:', imageKey);
     }
 
     // 2. Run OCR in parallel (non-blocking)
+    console.log('[EXPENSE] running OCR extraction...');
     const ocrPromise = req.file ? OcrService.extractReceiptData(req.file.buffer) : Promise.resolve(null);
 
     const ocrData = await ocrPromise;
+    console.log('[EXPENSE] OCR extraction complete - data:', ocrData);
 
     // 3. Build expense document
+    console.log('[EXPENSE] creating expense document in MongoDB');
     const expense = await Expense.create({
       userId: req.user.id,
       journeyId: journeyId || null,
@@ -50,15 +56,45 @@ export const createExpense = async (req, res, next) => {
           ? { type: 'Point', coordinates: [parseFloat(longitude), parseFloat(latitude)] }
           : undefined,
     });
+    console.log('[EXPENSE] expense created - id:', expense._id);
 
     // 4. Update journey totals if linked
     if (journeyId) {
+      console.log('[EXPENSE] updating journey totals - journeyId:', journeyId);
       await Journey.findByIdAndUpdate(journeyId, {
         $inc: { totalAmount: parseFloat(amount), expenseCount: 1 },
       });
+      console.log('[EXPENSE] journey updated');
     }
 
+    console.log('[EXPENSE] createExpense success');
     res.status(201).json({ success: true, data: expense });
+  } catch (err) {
+    console.error('[EXPENSE] createExpense error:', err.message);
+    next(err);
+  }
+};
+
+export const extractExpenseOcr = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Image file is required' });
+    }
+
+    const ocrData = await OcrService.extractReceiptData(req.file.buffer);
+    if (!ocrData) {
+      return res.status(503).json({ error: 'OCR service unavailable' });
+    }
+
+    // Return both backend-normalized and mobile-friendly keys.
+    res.json({
+      raw_text: ocrData.rawText ?? '',
+      merchant_name: ocrData.merchantName ?? null,
+      total_amount: ocrData.detectedAmount ?? null,
+      date: ocrData.detectedDate ? new Date(ocrData.detectedDate).toISOString() : null,
+      confidence: ocrData.confidence ?? 0,
+      ocrData,
+    });
   } catch (err) {
     next(err);
   }
@@ -67,6 +103,7 @@ export const createExpense = async (req, res, next) => {
 export const getExpenses = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, category, journeyId, search, startDate, endDate } = req.query;
+    console.log('[EXPENSE] getExpenses request - user:', req.user.id, 'page:', page, 'limit:', limit, 'category:', category);
 
     const filter = { userId: req.user.id, isDeleted: false };
     if (category) filter.category = category;
@@ -91,6 +128,7 @@ export const getExpenses = async (req, res, next) => {
       Expense.countDocuments(filter),
     ]);
 
+    console.log('[EXPENSE] getExpenses success - returned:', expenses.length, 'total:', total);
     res.json({
       data: expenses,
       pagination: {
@@ -101,32 +139,41 @@ export const getExpenses = async (req, res, next) => {
       },
     });
   } catch (err) {
+    console.error('[EXPENSE] getExpenses error:', err.message);
     next(err);
   }
 };
 
 export const deleteExpense = async (req, res, next) => {
   try {
+    console.log('[EXPENSE] deleteExpense request - user:', req.user.id, 'expenseId:', req.params.id);
     const expense = await Expense.findOne({
       _id: req.params.id,
       userId: req.user.id,
       isDeleted: false,
     });
-    if (!expense) return res.status(404).json({ error: 'Not found' });
+    if (!expense) {
+      console.log('[EXPENSE] deleteExpense failed - expense not found:', req.params.id);
+      return res.status(404).json({ error: 'Not found' });
+    }
 
     // Soft delete
+    console.log('[EXPENSE] soft deleting expense:', req.params.id);
     expense.isDeleted = true;
     await expense.save();
 
     // Update journey totals
     if (expense.journeyId) {
+      console.log('[EXPENSE] updating journey totals after delete - journeyId:', expense.journeyId);
       await Journey.findByIdAndUpdate(expense.journeyId, {
         $inc: { totalAmount: -expense.amount, expenseCount: -1 },
       });
     }
 
+    console.log('[EXPENSE] deleteExpense success');
     res.json({ success: true, message: 'Expense deleted' });
   } catch (err) {
+    console.error('[EXPENSE] deleteExpense error:', err.message);
     next(err);
   }
 };
